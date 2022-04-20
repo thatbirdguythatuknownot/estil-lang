@@ -1,0 +1,529 @@
+/:
+Grammar specification:
+'OP'                            # non-soft keyword | operator
+"OP"                            # soft keyword
+x+                              # x appears at least 1 time
+x*                              # x appears at least 0 times
+[x] == x?                       # x is optional
+X                               # upper case name means raw tokens
+y.x+                            # x repeated at least 1 time, each occurence joined by y
+y.x*                            # x repeated at least 0 times, each occurence joined by y
+&x                              # positive lookahead
+!e                              # negative lookahead
+x | y                           # alternatives
+x ~ y                           # use the current alternative if x matches, and error/stop parsing the rule if y doesn't match
+rule_name: rule_body		    # rule
+rule_name (<flags>): rule_body  # rule with flags
+    flags (negate with !):
+        W = don't ignore non-newline whitespaces except where W* is
+            (negated: ignore non-newline whitespaces except where W is used)
+        N = don't ignore line breaks except where N* is
+            (negated: ignore non-newline whitespaces except where N is used)
+        rI = use only raw ints when INT is used
+        cS = use string contents instead of string token when STRING is used
+        O = operators
+name=x                          # assign x to name
+{ x }                           # implementation of rule
+
+File layout is based on the layout of the Grammar/python.gram file in the python source code at github.com/python/cpython
+:/
+
+/; START RULES
+
+exec: a=statement* EOF { AST_Exec(a) }
+eval: a=expressions? EOF { AST_Eval(a) }
+
+/; PRIMARY STATEMENTS
+
+statement: assignment_stmt
+         | block_stmt
+         | simple_stmt
+
+block_stmt: &'loop' loop_stmt
+          | &'while' while_loop
+          | &'for' for_loop
+          | &'if' if_stmt
+          | &"switch" switch_stmt
+/;        | &"match" match_stmt
+          | &'struct' struct_def
+          | &'union' union_def
+          | &'enum' enum_def
+          | &(IDENT | '(') func_def
+
+simple_stmt (!W!N): &'struct' struct_dcl
+                  | &'union' union_dcl
+                  | &'enum' enum_dcl
+                  | &"ret" ret_stmt
+                  | &"cont" cont_stmt
+                  | &'break' break_stmt
+                  | &("label" | ':' !W !N ':') label_stmt
+                  | &"del" del_stmt
+                  | &"use" use_stmt
+                  | &"incl" incl_stmt
+                  | &"dcl" dcl_stmt
+                  | &("dcl" | '(') func_dcl
+                  | &'goto' goto_stmt
+                  | a=expression { AST_Expr(a) }
+                  | dcl_stmt
+                  | func_dcl
+                  | goto_stmt
+
+assignment_stmt:
+    | a=name_expr '=' b=block_stmt { AST_LabeledBlock(a, b) }
+
+/; BLOCK STATEMENTS
+
+loop_stmt:
+    | 'loop' a=block_raw { AST_RawLoopStmt(a) }
+
+while_loop:
+    | 'do'? a=block_raw 'while' '(' b=expression ')' { AST_WhileStmt(b, a, do_first=True) }
+    | 'while' a=expression b=block_raw { AST_WhileStmt(a, b, do_first=False) }
+
+for_loop:
+    | 'for' a=expression b=block_raw { AST_SimpleForStmt(a, b) }
+    | 'for' a=targets ('in' | '~>') b=expression c=block_raw { AST_ForStmt(a, b, c) }
+    | 'for' '(' a=statement? ':' b=expression? ':' c=statement? ')' d=block_raw {
+        AST_CForStmt(a, b, c, d) }
+
+func_def (O):
+    | '(' a=','.type_spec+ ','? ')' 'op' b=O '(' c=params? ')' d=block_raw {
+        AST_FuncDef(a, b, c, [], d, None) }
+    | '(' a=','.type_spec+ ','? ')' 'op' b=O '(' c=params? ')' '[' d=';'.capture* ']' e=block_raw {
+        AST_FuncDef(a, b, c, d, e, None) }
+    | a=type_spec? 'op' b=O '(' c=params? ')' d=block_raw {
+        AST_FuncDef(None if a is None else [a], b, c, [], d, None) }
+    | a=type_spec? 'op' b=O '(' c=params? ')' '[' d=';'.capture* ']' e=block_raw {
+        AST_FuncDef(None if a is None else [a], b, c, d, e, None) }
+    | '(' a=','.type_spec+ ','? ')' b=(c=IDENT '(' d=params? ')' { (c, d) })+ c=IDENT? d=variations? e=block_raw {
+        AST_FuncDef(a, [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], [], e, d) }
+    | '(' a=','.type_spec+ ','? ')' b=(c=IDENT '(' d=params? ')' { (c, d) })+ c=IDENT? d=variations? '[' e=';'.capture* ']' f=block_raw {
+        AST_FuncDef(a, [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], e, f, d) }
+    | a=type_spec? b=(c=IDENT '(' d=params? ')' { (c, d) })+ c=IDENT? d=variations? e=block_raw {
+        AST_FuncDef(None if a is None else [a], [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], [], e, d) }
+    | a=type_spec? b=(c=IDENT '(' d=params? ')' { (c, d) })+ c=IDENT? d=variations? '[' e=';'.capture* ']' f=block_raw {
+        AST_FuncDef(None if a is None else [a], [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], e, f, d) }
+
+if_stmt:
+    | 'if' a=expression b=block_raw c=('elif' d=expression e=block_raw { (d, e) })* ['else' f=block_raw] {
+        AST_IfStmt([(a, b)] + c + ([(True, f)] if f else [])) }
+
+switch_stmt:
+    | "switch" a=expression '{' b=switch_cases* '}' { AST_SwitchStmt(a, b) }
+
+switch_cases:
+    | "case" a=expression b=['as' c=targets { c }] c=('if' d=expression { d })* d=raw_block { AST_SwitchCaseStmt(a, b, c, d) }
+
+/: TODO: match_stmt
+match_stmt:
+    | "match" a=expression '{' b=match_cases* '}' { AST_MatchStmt(a, b) }
+
+match_cases:
+    | "case" a=pattern b=('if' c=expression { c })* d=raw_block { AST_MatchCaseStmt(a, None, b, d) }
+    | "case" a=pattern 'as' b=targets c=('if' d=expression { d })* e=raw_block { AST_MatchCaseStmt(a, b, c, e) }
+:/
+
+struct_def:
+    | 'struct' a=name_expr '{' b=field* '}' { AST_StructDef(a, b) }
+
+union_def:
+    | 'union' a=name_expr '{' b=field* '}' { AST_UnionDef(a, b) }
+
+field:
+    | a=type_spec b=IDENT ';' { AST_Field(a, b) }
+
+enum_def:
+    | 'enum' a=name_expr '{' b=','.enum_field+ ','? '}' { AST_EnumDef(a, b) }
+    | 'enum' a=name_expr '{' '}' { AST_EnumDef(a, []) }
+
+enum_field:
+    | a=IDENT b=['=' c=expression { c }] { AST_EnumField(a, b) }
+
+block_raw: '{' a=block? '}' { AST_Block(a) }
+
+/; SIMPLE STATEMENTS
+
+func_dcl:
+    | '(' a=','.type_spec+ ','? ')' b=name_expr '(' c=params? ')' {
+        AST_FuncDcl(a, b, c) }
+    | a=type_spec b=name_expr '(' c=params? ')' {
+        AST_FuncDcl([a], b, c) }
+    | 'dcl' a=name_expr '(' b=params? ')' {
+        AST_FuncDcl(None, a, b) }
+
+struct_dcl:
+    | 'struct' a=name_expr { AST_StructDcl(a) }
+
+union_dcl:
+    | 'union' a=name_expr { AST_UnionDcl(a) }
+
+enum_dcl:
+    | 'enum' a=name_expr { AST_EnumDcl(a) }
+
+ret_stmt:
+    | 'ret' a=variations? b=expressions? { AST_RetStmt(a, b) }
+
+cont_stmt:
+    | 'cont' a=variations? { AST_ContStmt(a) }
+
+break_stmt:
+    | 'break' a=variations? { AST_BreakStmt(a) }
+
+goto_stmt (!W!N):
+    | 'goto' a=name_expr { AST_GotoStmt(a) }
+    | a=name_expr ':' !W !N ':' { AST_GotoStmt(a) } 
+
+label_stmt (!W!N):
+    | 'label' a=name_expr { AST_LabelStmt(a) }
+    | ':' !W !N ':' a=name_expr { AST_LabelStmt(a) }
+
+del_stmt:
+    | 'del' a=','.name_expr+ { AST_DelStmt(a) }
+
+dcl_stmt:
+    | a=type_spec b=','.name_expr+ { AST_DclStmt(a, b) }
+    | 'dcl' a=','.name_expr+ { AST_DclStmt(None, a) }
+
+use_stmt:
+    | 'use' a=','.(b=attr_access !'=' { (AST_AttrUse(b), None) } | c=use_valid '=' '(' d=targets ')' { (c, d) })+ ','? { AST_UseStmt(a) }
+
+use_valid (cS):
+    | a=(IDENT | attr_access) '[' b=(STRING | '*') ']' { AST_SubscrUse(a, b) }
+    | a=attr_access { AST_AttrUse(a) }
+
+incl_stmt:
+    | 'incl' a=','.(b=incl_valid !'=' { (b, None) } | c=incl_valid '=' '(' d=targets ')' { (c, d) })+ ','? { AST_InclStmt(a) }
+
+incl_valid (cS):
+    | a=(IDENT | attr_access) '[' b=(STRING | '*') ']' { AST_SubscrIncl(a, b) }
+    | a=(IDENT | attr_access) b=['.' c='*' { c }] { AST_AttrIncl(a if b is None else a + [b]) }
+
+/; EXPRESSIONS
+
+expressions:
+    | expression !','
+    | a=','.expression+ ','? { AST_Tuple(a, frozen=True, without_parens=True) }
+
+expression:
+    | lambda
+    | unpack
+
+lambda:
+    a=['[' d=';'.capture* ';'? ']' { d }] b=type_spec? ~ '(' c=args? ')' ':' d=block_raw { AST_Lambda(a, b if b is None else [b], c, d) }
+    a=['[' d=';'.capture* ';'? ']' { d }] '(' b=','.type_spec+ ','? ')' ~ '(' c=args? ')' ':' d=block_raw { AST_Lambda(a, b, c, d) }
+
+unpack:
+    | '@' a=(assignment_expr | choose_expr) { AST_UnaryOp(SeqUnpack, a, precedence=0) }
+    | '$' a=(assignment_expr | choose_expr) { AST_UnaryOp(MapUnpack, a, precedence=0) }
+    | assignment_expr
+    | choose_expr
+
+assignment_expr:
+    | a=targets '=' b=expressions { AST_Assignment(a, b) }
+    | augmented_assignment
+
+augmented_assignment (!W!N):
+    | a=targets '.=' b=IDENT { AST_AugAssignment(a, Attr, b, None) }
+    | a=targets '[' !W !N '=' b=slices ']' { AST_AugAssignment(a, Subscr, b, None) }
+    | a=targets '(' !W !N '=' b=args ')' { AST_AugAssignment(a, Call, b, None) }
+    | a=targets '{' b=expression '}' !W !N '=' c=expressions { AST_AugAssignment(a, Hyp, c, b) }
+    | a=targets '^=' b=expressions { AST_AugAssignment(a, Pow, b, None) }
+    | a=targets '*=' b=expressions { AST_AugAssignment(a, Mul, b, None) }
+    | a=targets '//=' b=expressions { AST_AugAssignment(a, FDiv, b, None) }
+    | a=targets '/=' b=expressions { AST_AugAssignment(a, Div, b, None) }
+    | a=targets '%=' b=expressions { AST_AugAssignment(a, Mod, b, None) }
+    | a=targets '\\=' b=expressions { AST_AugAssignment(a, CDiv, b, None) }
+    | a=targets '<<=' b=expressions { AST_AugAssignment(a, BLS, b, None) }
+    | a=targets '>>=' b=expressions { AST_AugAssignment(a, BRS, b, None) }
+    | a=targets '<>=' b=expressions { AST_AugAssignment(a, BLR, b, None) }
+    | a=targets '><=' b=expressions { AST_AugAssignment(a, BRR, b, None) }
+    | a=targets '<<<=' b=expressions { AST_AugAssignment(a, ALS, b, None) }
+    | a=targets '>>>=' b=expressions { AST_AugAssignment(a, ARS, b, None) }
+    | a=targets '&=' b=expressions { AST_AugAssignment(a, BAnd, b, None) }
+    | a=targets '~&=' b=expressions { AST_AugAssignment(a, BNAnd, b, None) }
+    | a=targets '$=' b=expressions { AST_AugAssignment(a, BXor, b, None) }
+    | a=targets '~$=' b=expressions { AST_AugAssignment(a, BNXor, b, None) }
+    | a=targets '|=' b=expressions { AST_AugAssignment(a, BOr, b, None) }
+    | a=targets '~|=' b=expressions { AST_AugAssignment(a, BNOr, b, None) }
+    | a=targets '+=' b=expressions { AST_AugAssignment(a, Add, b, None) }
+    | a=targets '-=' b=expressions { AST_AugAssignment(a, Sub, b, None) }
+    | a=targets '@=' b=expressions { AST_AugAssignment(a, Comp, b, None) }
+    | a=targets '!' !W !N '&&=' b=expressions { AST_AugAssignment(a, LNAnd, b, None) }
+    | a=targets '!' !W !N '$$=' b=expressions { AST_AugAssignment(a, LNXor, b, None) }
+    | a=targets '!' !W !N ('||=' | '?:=') b=expressions { AST_AugAssignment(a, LNOr, b, None) }
+    | a=targets '&&=' b=expressions { AST_AugAssignment(a, LAnd, b, None) }
+    | a=targets '$$=' b=expressions { AST_AugAssignment(a, LXor, b, None) }
+    | a=targets ('||=' | '?:=') b=expressions { AST_AugAssignment(a, LOr, b, None) }
+    | a=targets '??=' b=expressions { AST_AugAssignment(a, Clsc, b, None) }
+    | a=targets '?=' b=expressions { AST_AugAssignment(a, TAnd, b, None) }
+
+choose_expr:
+    | a=ternary_expr '=<' b=choose_expr { AST_BinOp(a, Also, b, precedence=2) }
+    | a=ternary_expr '=>' b=choose_expr { AST_BinOp(a, Then, b, precedence=2) }
+    | ternary_expr
+
+ternary_expr:
+    | a=coalesce '?' b=ternary_expr ':' c=ternary_expr { AST_TernOp(TTern, a, b, c, precedence=3) }
+    | coalesce
+
+coalesce:
+    | a=coalesce '??' b=disjunction { AST_BinOp(a, Clsc, b, precedence=4) }
+    | disjunction
+
+disjunction (!W!N):
+    | a=excl_disjunction b=(('or' | '||' | '?:') c=excl_disjunction { (LOr, c) }
+                           | ("nor" | '!||', | '!' !W !N '?:') c=excl_disjunction { (LNOr, c) })+ {
+        AST_BoolOp(a, Or, b, precedence=5) }
+    | excl_disjunction
+
+excl_disjunction (!W!N):
+    | a=keyword_inversion b=(('xor' | '$$') c=keyword_inversion { (LXor, c) }
+                            | ("nxor" | '!' !W !N '$$') c=keyword_inversion { (LNXor, c) })+ {
+        AST_BoolOp(a, Xor, b, precedence=6) }
+    | keyword_inversion
+
+keyword_inversion:
+    | 'not' a=conjunction { AST_UnaryOp(Not, a, precedence=7) }
+    | conjunction
+
+conjunction (!W!N):
+    | a=comparisons b=(('and' | '&&') c=comparisons { (LAnd, c) }
+                      | ("nand" | '!' !W !N '&&') c=comparisons { (LNAnd, c) })+ {
+        AST_BoolOp(a, And, b, precedence=8) }
+    | comparisons
+
+comparisons:
+    | a=composition b=comparison+ { AST_Compare(a, b) }
+    | composition
+
+comparison:
+    | membership
+    | exact_comparison
+    | common_comparison
+    | threeway_comparison
+
+membership:
+    | ('in' | '~>') a=composition { (In, a) }
+    | ("nin" | '~!') a=composition { (NotIn, a) }
+
+exact_comparison:
+    | ('is' | '#=') a=composition { (Is, a) }
+    | ("nis" | '#!') a=composition { (IsNot, a) }
+
+common_comparison:
+    | '==' a=composition { (Eq, a) }
+    | '!=' a=composition { (NotEq, a) }
+    | '<' a=composition { (LT, a) }
+    | '>' a=composition { (GT, a) }
+    | '<=' a=composition { (LTE, a) }
+    | '>=' a=composition { (GTE, a) }
+
+threeway_comparison:
+    | '<=>' a=composition { (RichCmp, a) }
+
+composition:
+    | a=composition '@' b=sum { AST_BinOp(a, Comp, b, precedence=10) }
+    | sum
+
+sum:
+    | a=sum '+' b=bitwise_or { AST_BinOp(a, Add, b, precedence=11) }
+    | a=sum '-' b=bitwise_or { AST_BinOp(a, Sub, b, precedence=11) }
+    | bitwise_or
+
+bitwise_or:
+    | a=bitwise_or '|' b=bitwise_xor { AST_BinOp(a, BOr, b, precedence=12) }
+    | a=bitwise_or '~|' b=bitwise_xor { AST_BinOp(a, BNOr, b, precedence=12) }
+    | bitwise_xor
+
+bitwise_xor:
+    | a=bitwise_xor '$' b=bitwise_and { AST_BinOp(a, BXor, b, precedence=13) }
+    | a=bitwise_xor '~$' b=bitwise_and { AST_BinOp(a, BNXor, b, precedence=13) }
+    | bitwise_and
+
+bitwise_and:
+    | a=bitwise_and '&' b=arith_shift { AST_BinOp(a, BAnd, b, precedence=14) }
+    | a=bitwise_and '~&' b=arith_shift { AST_BinOp(a, BNAnd, b, precedence=14) }
+    | arith_shift
+
+arith_shift:
+    | a=arith_shift '<<<' b=common_shift { AST_BinOp(a, ALS, b, precedence=15) }
+    | a=arith_shift '>>>' b=common_shift { AST_BinOp(a, ARS, b, precedence=15) }
+    | common_shift
+
+common_shift (!W!N):
+    | a=common_shift '<<' b=term { AST_BinOp(a, BLS, b, precedence=16) }
+    | a=common_shift '>>' b=term { AST_BinOp(a, BRS, b, precedence=16) }
+    | a=common_shift '<' !W !N '>' b=term { AST_BinOp(a, BLR, b, precedence=16) }
+    | a=common_shift '>' !W !N '<' b=term { AST_BinOp(a, BRR, b, precedence=16) }
+    | term
+
+term:
+    | a=term '*' b=operator_inversion { AST_BinOp(a, Mul, b, precedence=17) }
+    | a=term '//' b=operator_inversion { AST_BinOp(a, FDiv, b, precedence=17) }
+    | a=term '/' b=operator_inversion { AST_BinOp(a, Div, b, precedence=17) }
+    | a=term '%' b=operator_inversion { AST_BinOp(a, Mod, b, precedence=17) }
+    | a=term '\\' b=operator_inversion { AST_BinOp(a, CDiv, b, precedence=17) }
+    | operator_inversion
+
+operator_inversion:
+    | '!' a=operator_inversion { AST_UnaryOp(Not, a, precedence=18) }
+    | factor
+
+factor:
+    | '-' a=factor { AST_UnaryOp(USub, a, precedence=19) }
+    | '+' a=factor { AST_UnaryOp(UAdd, a, precedence=19) }
+    | '~' a=factor { AST_UnaryOp(Invert, a, precedence=19) }
+    | hypop
+
+hypop (!W!N):
+    | a=factorial '{' !W !N '|' b=expression '|' !W !N '}' c=hypop { AST_TernOp(THyp, a, b, c, precedence=20) }
+    | a=factorial '^' b=factor { AST_BinOp(a, Pow, b, precedence=20) }
+    | factorial
+
+factorial:
+    | a=factorial '!' { AST_UnaryOp(Fact, a, precedence=21) }
+    | length
+
+length:
+    | '#' a=length { AST_UnaryOp(Len, a, precedence=22) }
+    | range
+
+range:
+    | a=cast? '->' b=cast? { AST_Range(a, b, end_exclusive=True, frozen=False) }
+    | a=cast? ':>' b=cast? { AST_Range(a, b, end_exclusive=True, frozen=True) }
+    | a=cast? '..' b=cast? { AST_Range(a, b, end_exclusive=False, frozen=False) }
+    | a=cast? ':.' b=cast? { AST_Range(a, b, end_exclusive=False, frozen=True) }
+    | cast
+
+cast:
+    | '<' a=tspec '>' b=reference { AST_Cast(a, b) }
+    | reference
+
+reference:
+    | '&' a=reference { AST_UnaryOp(Ref, a, precedence=25) }
+    | '*' a=reference { AST_UnaryOp(Deref, a, precedence=25) }
+    | primary
+
+primary:
+    | a=primary '.' b=IDENT { primary_appendleft((AttrP, b)) }
+    | a=primary '[' b=slices? ']' { primary_appendleft((SubscrP, b)) }
+    | a=primary '(' b=genexpr ')' { primary_appendleft((CallP, [AST_Arg(None, b)])) }
+    | a=primary '(' b=args? ')' { primary_appendleft((CallP, b)) }
+    | a=safe_navigation { AST_Primary(a, primary_array) if primary_array else a }
+
+safe_navigation:
+    | a=atom '?' { AST_UnaryOp(Safe, a, precedence=27) }
+    | atom
+
+atom:
+    | name_expr
+    | ("null" | "nil") { AST_Constant(None) }
+    | "NAN" { AST_NameWithDefault("NAN", default=float('nan')) }
+    | "INF" { AST_NameWithDefault("INF", default=float('inf')) }
+    | "true" { AST_Constant(True) }
+    | "T" { AST_NameWithDefault("T", default=True) }
+    | "false" { AST_Constant(False) }
+    | "F" { AST_NameWithDefault("F", default=False) }
+    | '@' { AST_Modifier() }
+    | a=IDENT { AST_Name(a) }
+    | INT
+    | DEC
+    | a=STRING+ { AST_Strings(a) }
+    | &'(' (tuple | tuple_comp | '(' a=expression ')' { a })
+    | &'[' (list | list_comp)
+    | &'{' (set | dict | set_comp | dict_comp | raw_block)
+    | &'|' convenient
+
+convenient:
+    | '|' a=params_nodefault '|' b=expression { AST_Lambda([], None, a, AST_Block([b])) }
+
+genexpr:
+    | a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] { AST_GenComp(a, b, c, d) }
+
+/; data types and comprehensions
+tuple (!W!N):
+    | '(' a=[b=','.expression+ ','? { b }] ')' { AST_Tuple(a, frozen=True) }
+    | '(' !W !N ':' a=[b=','.expression+ ','? { b }] ')' { AST_Tuple(a, frozen=False) }
+
+list (!W!N):
+    | '[' a=[b=','.expression+ ','? { b }] ']' { AST_List(a, frozen=False) }
+    | '[' !W !N ':' a=[b=','.expression+ ','? { b }] ']' { AST_List(a, frozen=True) }
+
+set (!W!N):
+    | '{' a=','.expression+ ','?  '}' { AST_Set(a, frozen=False) }
+    | '{' ',' '}' { AST_Set([], frozen=False) }
+    | '{' !W !N ':' a=','.expression+ ','? '}' { AST_Set(a, frozen=True) }
+    | '{' !W !N ':' ',' '}' { AST_Set([], frozen=True) }
+
+dict (!W!N):
+    | '{' a=[b=','.(c=expression ':' d=expression { (c, d) })+ ','? { b }] '}' { AST_Dict(a, frozen=False) }
+    | '{' !W !N ':' a=[b=','.(c=expression ':' d=expression { (c, d) })+ ','? { b }] '}' { AST_Dict(a, frozen=True) }
+
+tuple_comp (!W!N):
+    | '(' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=True) }
+    | '(' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=False) }
+
+list_comp (!W!N):
+    | '[' ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=True) }
+    | '[' !W !N a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=False) }
+
+set_comp (!W!N):
+    | '{' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=True) }
+    | '{' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=False) }
+
+dict_comp (!W!N):
+    | '{' !W !N ':' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=True) }
+    | '{' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=False) }
+
+/; MISCELLANEOUS RULES
+
+targets:
+    | a=','.target+ ','? { AST_Targets(a) }
+
+target:
+    | a=type_spec? b=name_expr { (False, a, b) }
+    | "strong" a=type_spec b=name_expr { (True, a, b) }
+
+type_spec:
+    | a='|'.IDENT+ { AST_TypeSpec(a) }
+
+name_expr:
+    | a=IDENT b=variations? { AST_Name(a, b) }
+
+variations (!rI):
+    | '(' ':' a=INT? ':' ')' { AST_ScopeNum(a) }
+    | '(' '|' a=IDENT? '|' ')' { AST_ScopeName(a) }
+
+attr_access:
+    | a=IDENT '.' b='.'.IDENT+ { [a] + b }
+
+block:
+    | statement+
+
+capture:
+    | name_expr
+
+params:
+    | a=','.param+ ','? { a }
+
+params_nodefault:
+    | a=','.(type_spec? b=IDENT { AST_Param(a, b, None) })+ ','? { a }
+
+param (!W!N):
+    | a=type_spec? b=IDENT { AST_Param(a, b, None) }
+    | a=type_spec? b=IDENT ':' !W !N '=' c=expression { AST_Param(a, b, c, late_bound_default=False) }
+    | a=type_spec? b=IDENT '=' !W !N '>' c=expression { AST_Param(a, b, c, late_bound_default=True) }
+
+args:
+    | a=','.(arg | &',' { None })+ ','? { a }
+
+arg (!W!N):
+    | a=[b=IDENT ':' !W !N '=' { b }] c=expression { AST_Arg(a, c) }
+
+slices:
+    | a=slice !',' { a }
+    | a=','.slice+ ','? { AST_Tuple(a, frozen=True, without_parens=True) }
+
+slice:
+    | a=expression? ':' b=expression? c=[':' d=expression? { d }] { AST_Slice(a, b, c) }
+    | expression
