@@ -443,13 +443,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('(', i))
         elif source[i] == ')':
             if not bracket_stack:
-                return LexerError("Closing ) does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
+                print(LexerWarning("Closing ) does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
             elif bracket_stack[-1][0] != '(':
                 j = bracket_stack[-1][1]
-                return LexerErrorWithStart(f'Closing ) does not match {bracket_stack[-1][0]!s}',
-                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                           "note: opening bracket here",
-                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
+                print(LexerWarningWithStart(f'Closing ) does not match {bracket_stack[-1][0]!s}',
+                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                            "note: opening bracket here",
+                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
             bracket_stack.pop()
             new_token((LT_RPAREN, LS_RPAREN, i, (i := i + 1)))
         elif source[i] == '[':
@@ -457,13 +457,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('[', i))
         elif source[i] == ']':
             if not bracket_stack:
-                return LexerError("Closing ] does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
+                print(LexerWarning("Closing ] does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
             elif bracket_stack[-1][0] != '[':
                 j = bracket_stack[-1][1]
-                return LexerErrorWithStart(f'Closing ] does not match {bracket_stack[-1][0]!s}',
-                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                           "note: opening bracket here",
-                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
+                print(LexerWarningWithStart(f'Closing ] does not match {bracket_stack[-1][0]!s}',
+                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                            "note: opening bracket here",
+                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
             bracket_stack.pop()
             new_token((LT_RBRACKET, LS_RBRACKET, i, (i := i + 1)))
         elif source[i] == '{':
@@ -471,13 +471,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('{', i))
         elif source[i] == '}':
             if not bracket_stack:
-                return LexerError("Closing } does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
+                print(LexerWarning("Closing } does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
             elif bracket_stack[-1][0] != '{':
                 j = bracket_stack[-1][1]
-                return LexerErrorWithStart(f'Closing }} does not match {bracket_stack[-1][0]!s}',
-                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                           "note: opening bracket here",
-                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
+                print(LexerWarningWithStart(f'Closing }} does not match {bracket_stack[-1][0]!s}',
+                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                            "note: opening bracket here",
+                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
             bracket_stack.pop()
             new_token((LT_RBRACE, LS_RBRACE, i, (i := i + 1)))
         elif source[i] == ',':
@@ -1470,9 +1470,10 @@ def _lexer(source: str) -> list:
         else:
             print(LexerWarning(f"Ignoring unexpected character {f'U+{ord(source[i]):04x}'}", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]), len(onenewl_source[:i].split('\n')[l])))
     if bracket_stack:
-        j = bracket_stack[-1][1]
-        return LexerError(f"Bracket was never closed: {bracket_stack[-1][0]}",
-                          (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
+        for bracket in bracket_stack:
+            j = bracket[1]
+            print(LexerWarning(f"Bracket was never closed: {bracket[0]}",
+                               (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
     new_token((LT_EOF, 'EOF', -1, -1))
     yield None
     yield tokens
@@ -1491,7 +1492,7 @@ def lexer(source):
     else:
         return next(gen)
 
-if 0:
+if __name__ == '__main__':
     [*lexer(r"5.7de-12339341444841231232323333124.7")]
     [*lexer("crbfua'\u2424'")]
     print(lexer("\\ "))
