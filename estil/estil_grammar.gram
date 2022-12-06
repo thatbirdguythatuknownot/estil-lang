@@ -77,13 +77,13 @@ loop_stmt:
     | 'loop' a=block_raw { AST_RawLoopStmt(a) }
 
 while_loop:
-    | 'do'? a=block_raw 'while' '(' b=expression ')' { AST_WhileStmt(b, a, do_first=True) }
-    | 'while' a=expression b=block_raw { AST_WhileStmt(a, b, do_first=False) }
+    | 'do'? a=block_raw 'while' '(' b=expressions ')' { AST_WhileStmt(b, a, do_first=True) }
+    | 'while' a=expressions b=block_raw { AST_WhileStmt(a, b, do_first=False) }
 
 for_loop:
-    | 'for' a=expression b=block_raw { AST_SimpleForStmt(a, b) }
-    | 'for' a=targets ('in' | '~>') b=expression c=block_raw { AST_ForStmt(a, b, c) }
-    | 'for' '(' a=statement? ':' b=expression? ':' c=statement? ')' d=block_raw {
+    | 'for' a=expressions b=block_raw { AST_SimpleForStmt(a, b) }
+    | 'for' a=targets ('in' | '~>') b=expressions c=block_raw { AST_ForStmt(a, b, c) }
+    | 'for' '(' a=statement? ':' b=expressions? ':' c=statement? ')' d=block_raw {
         AST_CForStmt(a, b, c, d) }
 
 func_def (O):
