@@ -74,11 +74,11 @@ assignment_stmt:
 /; BLOCK STATEMENTS
 
 loop_stmt:
-    | 'loop' a=block_raw { AST_RawLoopStmt(a) }
+    | 'loop' a=block_or_stmt { AST_RawLoopStmt(a) }
 
 while_loop:
-    | 'do'? a=block_raw 'while' '(' b=expressions ')' { AST_WhileStmt(b, a, do_first=True) }
-    | 'while' a=expressions b=block_raw { AST_WhileStmt(a, b, do_first=False) }
+    | 'do'? a=block_or_stmt 'while' '(' b=expressions ')' { AST_WhileStmt(b, a, do_first=True) }
+    | 'while' a=expressions b=block_or_stmt { AST_WhileStmt(a, b, do_first=False) }
 
 for_loop:
     | 'for' a=expressions b=block_raw { AST_SimpleForStmt(a, b) }
@@ -105,7 +105,7 @@ func_def (O):
         AST_FuncDef(None if a is None else [a], [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], e, f, d) }
 
 if_stmt:
-    | p=('if' a=expression b=block_raw { (1, a, b) } | 'ifzip' a=':'.expression+ b=block_raw+ { (0, a, b) }) c=('elif' d=expression e=block_raw { (1, d, e) } | 'elifzip' d=':'.expression+ e=block_raw+ { (0, d, e) })* f=['else' g=block_raw { g }] {
+    | p=('if' a=expression b=block_or_stmt { (1, a, b) } | 'ifzip' a=':'.expression+ b=block_or_stmt+ { (0, a, b) }) c=('elif' d=expression e=block_or_stmt { (1, d, e) } | 'elifzip' d=':'.expression+ e=block_or_stmt+ { (0, d, e) })* f=['else' g=block_or_stmt { g }] {
         AST_IfStmt([p] + c + ([(True, f)] if f else [])) }
 
 switch_stmt:
@@ -139,7 +139,11 @@ enum_def:
 enum_field:
     | a=IDENT b=['=' c=expression { c }] { AST_EnumField(a, b) }
 
-block_raw: '{' a=block? '}' { AST_Block(a) }
+block_raw: '{' a=statement* '}' { AST_Block(a) }
+
+block_or_stmt:
+    | block_raw
+    | a=statement { AST_Block([a]) }
 
 /; SIMPLE STATEMENTS
 
@@ -496,9 +500,6 @@ variations (!rI):
 
 attr_access:
     | a=IDENT '.' b='.'.IDENT+ { [a] + b }
-
-block:
-    | statement+
 
 capture:
     | name_expr
