@@ -4,10 +4,12 @@ Grammar specification:
 "OP"                            # soft keyword
 x+                              # x appears at least 1 time
 x*                              # x appears at least 0 times
+x{m,n}                          # x appears at least len(m) times and at most len(n) times
 [x] == x?                       # x is optional
 X                               # upper case name means raw tokens
 y.x+                            # x repeated at least 1 time, each occurence joined by y
 y.x*                            # x repeated at least 0 times, each occurence joined by y
+y.x{m,n}                        # x appears at least len(m) times and at most len(n) times, each occurence joined by y 
 &x                              # positive lookahead
 !e                              # negative lookahead
 x | y                           # alternatives
@@ -105,7 +107,7 @@ func_def (O):
         AST_FuncDef(None if a is None else [a], [*map(lambda x: x[0], b)] + [c], [*map(lambda x: x[1], b)], e, f, d) }
 
 if_stmt:
-    | p=('if' a=expression b=block_or_stmt { (1, a, b) } | 'ifzip' a=':'.expression+ b=block_or_stmt+ { (0, a, b) }) c=('elif' d=expression e=block_or_stmt { (1, d, e) } | 'elifzip' d=':'.expression+ e=block_or_stmt+ { (0, d, e) })* f=['else' g=block_or_stmt { g }] {
+    | p=('if' a=expression b=block_or_stmt { (1, a, b) } | 'ifzip' a=':'.expression+ b=block_or_stmt{a} { (0, a, b) }) c=('elif' d=expression e=block_or_stmt { (1, d, e) } | 'elifzip' d=':'.expression+ e=block_or_stmt{d} { (0, d, e) })* f=['else' g=block_or_stmt { g }] {
         AST_IfStmt([p] + c + ([(True, f)] if f else [])) }
 
 switch_stmt:
