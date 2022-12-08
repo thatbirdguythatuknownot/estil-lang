@@ -415,6 +415,7 @@ primary:
     | a=primary '[' b=slices? ']' { primary_appendleft((SubscrP, b)) }
     | a=primary '(' b=genexpr ')' { primary_appendleft((CallP, [AST_Arg(None, b)])) }
     | a=primary '(' b=args? ')' { primary_appendleft((CallP, b)) }
+    | a=primary b=block_raw { primary_appendleft((FuncP, b)) }
     | a=safe_navigation { AST_Primary(a, primary_array) if primary_array else a }
 
 safe_navigation:
