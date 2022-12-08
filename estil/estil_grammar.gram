@@ -363,12 +363,13 @@ common_shift (!W!N):
     | a=common_shift '>' !W !N '<' b=term { AST_BinOp(a, BRR, b, precedence=16) }
     | term
 
-term:
+term (!W!N):
     | a=term '*' b=operator_inversion { AST_BinOp(a, Mul, b, precedence=17) }
     | a=term '//' b=operator_inversion { AST_BinOp(a, FDiv, b, precedence=17) }
     | a=term '/' b=operator_inversion { AST_BinOp(a, Div, b, precedence=17) }
     | a=term '%' b=operator_inversion { AST_BinOp(a, Mod, b, precedence=17) }
     | a=term '\\' b=operator_inversion { AST_BinOp(a, CDiv, b, precedence=17) }
+    | a=term '/' !W !N '%' b=operator_inversion { AST_BinOp(a, DivMod, b, precedence=17) }
     | operator_inversion
 
 operator_inversion:
@@ -444,8 +445,9 @@ atom:
 convenient:
     | '|' a=params_nodefault '|' b=expression { AST_Lambda([], None, a, AST_Block([b])) }
 
-genexpr:
+genexpr (!W!N):
     | a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] { AST_GenComp(a, b, c, d) }
+    | a=expression ':' !W !N ':' b=','.expression+ ','? c=[':' d=','.expression+ ','? { d }] { AST_GenComp(a, None, b, c) }
 
 /; data types and comprehensions
 tuple (!W!N):
@@ -469,18 +471,26 @@ dict (!W!N):
 tuple_comp (!W!N):
     | '(' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=True) }
     | '(' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=False) }
+    | '(' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, None, c, d, frozen=True) }
+    | '(' !W !N ':' a=expression ':' !W !N ':' ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, None, c, d, frozen=False) }
 
 list_comp (!W!N):
     | '[' ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=True) }
     | '[' !W !N a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=False) }
+    | '[' ':' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, None, c, d, frozen=True) }
+    | '[' !W !N a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, None, c, d, frozen=False) }
 
 set_comp (!W!N):
     | '{' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=True) }
     | '{' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=False) }
+    | '{' !W !N ':' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, None, c, d, frozen=True) }
+    | '{' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, None, c, d, frozen=False) }
 
 dict_comp (!W!N):
     | '{' !W !N ':' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=True) }
     | '{' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=False) }
+    | '{' !W !N ':' a=expression ':' b=expression ':' !W !N ':' d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, None, d, e, frozen=True) }
+    | '{' a=expression ':' b=expression ':' !W !N ':' d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, None, d, e, frozen=False) }
 
 /; MISCELLANEOUS RULES
 
