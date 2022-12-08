@@ -423,7 +423,7 @@ safe_navigation:
     | a=atom '?' { AST_UnaryOp(Safe, a, precedence=27) }
     | atom
 
-atom:
+atom (O):
     | name_expr
     | ("null" | "nil") { AST_Constant(None) }
     | "NAN" { AST_NameWithDefault("NAN", default=float('nan')) }
@@ -433,7 +433,7 @@ atom:
     | "false" { AST_Constant(False) }
     | "F" { AST_NameWithDefault("F", default=False) }
     | '@' { AST_Modifier() }
-    | a=IDENT { AST_Name(a) }
+    | a=(IDENT | O) { AST_Name(a) }
     | INT
     | DEC
     | a=STRING+ { AST_Strings(a) }
