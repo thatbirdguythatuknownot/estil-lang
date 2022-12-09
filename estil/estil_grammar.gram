@@ -232,6 +232,7 @@ augmented_assignment (!W!NO):
     | a=targets '.=' b=(IDENT | O)+ { AST_AugAssignment(a, Attr, b, None) }
     | a=targets '[' !W !N '=' b=slices ']' { AST_AugAssignment(a, Subscr, b, None) }
     | a=targets '(' !W !N '=' b=args ')' { AST_AugAssignment(a, Call, b, None) }
+    | a=targets '{' !W !N '=' b=statement* '}' { AST_AugAssignment(a, Func, AST_Block(b), None) }
     | a=targets '{' b=expression '}' !W !N '=' c=expressions { AST_AugAssignment(a, Hyp, c, b) }
     | a=targets '^=' b=expressions { AST_AugAssignment(a, Pow, b, None) }
     | a=targets '*=' b=expressions { AST_AugAssignment(a, Mul, b, None) }
