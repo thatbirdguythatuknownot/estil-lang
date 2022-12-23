@@ -4,6 +4,7 @@ class AST_Node:
     def __init__(self, value, _name='AST_Node', start_pos=-1):
         self.value = value
         self._name = _name
+        self.start_pos = start_pos
     def __repr__(self):
         return f"{self._name}({self.value!r}, start_pos={self.start_pos})"
     def __str__(self):
