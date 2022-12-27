@@ -18,18 +18,21 @@ x | y                           # alternatives
 x ~ y                           # use the current alternative if x matches, and error/stop parsing the rule if y doesn't match
 @rule_name: rule_body           # rule; AT character (@) used to easily distinguish rules in the parser generator
 @rule_name (<flags>): rule_body # rule with flags
-    flags (negate with !):
+    flags:
         W = don't ignore non-newline whitespaces except where W* is
-            (negated: ignore non-newline whitespaces except where !W is used)
+            (when omitted: ignore non-newline whitespaces except where !W is used)
         N = don't ignore line breaks except where N* is
-            (negated: ignore non-newline whitespaces except where !N is used)
+            (when omitted: ignore non-newline whitespaces except where !N is used)
         rI = use only raw ints when INT is used
         cS = use string contents instead of string token when STRING is used
-        O = operators
+        cT = use token contents instead of token itself when a token is referenced
         I = pass current indent level to created objects
 name=x                          # assign x to name
 { x }                           # inline expression x; if it's the last in the rule path, return it
 :{ ... }                        # mini-grammar currently for inline checking
+
+Tokens:
+O = operators; any token other than
 
 File layout is based on the layout of the Grammar/python.gram file in the python source code at github.com/python/cpython
 :/
@@ -55,7 +58,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | &'enum' enum_def
     | &'fn' func_def
 
-@simple_stmt (!W!N):
+@simple_stmt:
     | &'struct' struct_dcl
     | &'union' union_dcl
     | &'enum' enum_dcl
@@ -90,7 +93,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | 'for' '(' a=statement? ':' b=expressions? ':' c=statement? ')' d=block_raw {
         AST_CForStmt(a, b, c, d) }
 
-@func_def (O):
+@func_def (cT):
     | 'fn' b=O '(' c=params? ')' ':' '(' a=','.(type_spec?)+ d=','? ')' d=block_raw {
         AST_FuncDef(a + [d] if d else a, [b], [c], [None], d, None) }
     | 'fn' b=O '(' c=params? ';' d=[e=';'.capture+ ';'? { e }] ')' ':' '(' a=','.(type_spec?)+ e=','? ')' e=block_raw {
@@ -137,15 +140,15 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 @union_def:
     | 'union' a=name_expr '{' b=field* '}' { AST_UnionDef(a, b) }
 
-@field_with_default: b=IDENT a=[':' c=type_spec { c }] '=' c=expression ';' { AST_DefaultField(a, b, c) }
+@field_with_default (cT): b=IDENT a=[':' c=type_spec { c }] '=' c=expression ';' { AST_DefaultField(a, b, c) }
 
-@field: b=IDENT a=[':' c=type_spec { c }] ';' { AST_Field(a, b) }
+@field (cT): b=IDENT a=[':' c=type_spec { c }] ';' { AST_Field(a, b) }
 
 @enum_def:
     | 'enum' a=name_expr t=[':' c=type_spec { c }] '{' b=','.enum_field+ ','? '}' { AST_EnumDef(a, t, b) }
     | 'enum' a=name_expr '{' '}' { AST_EnumDef(a, None, []) }
 
-@enum_field: a=IDENT b=['=' c=expression { c }] { AST_EnumField(a, b) }
+@enum_field (cT): a=IDENT b=['=' c=expression { c }] { AST_EnumField(a, b) }
 
 @block_raw (I): '{' a=statement* '}' { AST_Block(a) }
 
@@ -155,7 +158,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 
 /; SIMPLE STATEMENTS
 
-@func_dcl (O):
+@func_dcl (cT):
     | 'dcl' b=O '(' c=params? ')' ':' '(' a=','.(type_spec?)+ d=','? ')' {
         AST_FuncDcl(a + [d] if d else a, [b], [c], [None], None) }
     | 'dcl' b=O '(' c=params? ';' d=[e=';'.capture+ ';'? { e }] ')' ':' '(' a=','.(type_spec?)+ e=','? ')' {
@@ -185,11 +188,11 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 
 @break_stmt: 'break' a=variations? { AST_BreakStmt(a) }
 
-@goto_stmt (!W!N):
+@goto_stmt:
     | 'goto' a=name_expr { AST_GotoStmt(a) }
     | a=name_expr ':' !W !N ':' { AST_GotoStmt(a) } 
 
-@label_stmt (!W!N):
+@label_stmt:
     | 'label' a=name_expr { AST_LabelStmt(a) }
     | ':' !W !N ':' a=name_expr { AST_LabelStmt(a) }
 
@@ -203,14 +206,14 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 @use_stmt:
     | 'use' a=','.(b=attr_access !'=' { (AST_AttrUse(b), None) } | c=use_valid '=' '(' d=targets ')' { (c, d) })+ ','? { AST_UseStmt(a) }
 
-@use_valid (cS):
+@use_valid (cT):
     | a=(IDENT | attr_access) '[' b=(STRING | '*') ']' { AST_SubscrUse(a, b) }
     | a=attr_access { AST_AttrUse(a) }
 
 @incl_stmt:
     | 'incl' a=','.(b=incl_valid !'=' { (b, None) } | c=incl_valid '=' '(' d=targets ')' { (c, d) })+ ','? { AST_InclStmt(a) }
 
-@incl_valid (cS):
+@incl_valid (cT):
     | a=(IDENT | attr_access) '[' b=(STRING | '*') ']' { AST_SubscrIncl(a, b) }
     | a=(IDENT | attr_access) b=['.' c='*' { c }] { AST_AttrIncl(a if b is None else a + [b]) }
 
@@ -242,7 +245,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | a=targets '=' b=expressions { AST_Assignment(a, b) }
     | augmented_assignment
 
-@augmented_assignment (!W!NO):
+@augmented_assignment (cT):
     | a=targets '.=' b=(IDENT | O)+ { AST_AugAssignment(a, Attr, b, None) }
     | a=targets '[' !W !N '=' b=slices ']' { AST_AugAssignment(a, Subscr, b, None) }
     | a=targets '(' !W !N '=' b=args ')' { AST_AugAssignment(a, Call, b, None) }
@@ -291,13 +294,13 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | a=coalesce '??' b=disjunction { AST_BinOp(a, Clsc, b, precedence=4) }
     | disjunction
 
-@disjunction (!W!N):
+@disjunction:
     | a=excl_disjunction b=(('or' | '||' | '?:') c=excl_disjunction { (LOr, c) }
                            | ("nor" | '!||', | '!' !W !N '?:') c=excl_disjunction { (LNOr, c) })+ {
         AST_BoolOp(a, Or, b, precedence=5) }
     | excl_disjunction
 
-@excl_disjunction (!W!N):
+@excl_disjunction:
     | a=keyword_inversion b=(('xor' | '$$') c=keyword_inversion { (LXor, c) }
                             | ("nxor" | '!' !W !N '$$') c=keyword_inversion { (LNXor, c) })+ {
         AST_BoolOp(a, Xor, b, precedence=6) }
@@ -307,7 +310,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | 'not' a=conjunction { AST_UnaryOp(Not, a, precedence=7) }
     | conjunction
 
-@conjunction (!W!N):
+@conjunction:
     | a=comparisons b=(('and' | '&&') c=comparisons { (LAnd, c) }
                       | ("nand" | '!' !W !N '&&') c=comparisons { (LNAnd, c) })+ {
         AST_BoolOp(a, And, b, precedence=8) }
@@ -371,14 +374,14 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | a=arith_shift '>>>' b=common_shift { AST_BinOp(a, ARS, b, precedence=15) }
     | common_shift
 
-@common_shift (!W!N):
+@common_shift:
     | a=common_shift '<<' b=term { AST_BinOp(a, BLS, b, precedence=16) }
     | a=common_shift '>>' b=term { AST_BinOp(a, BRS, b, precedence=16) }
     | a=common_shift '<' !W !N '>' b=term { AST_BinOp(a, BLR, b, precedence=16) }
     | a=common_shift '>' !W !N '<' b=term { AST_BinOp(a, BRR, b, precedence=16) }
     | term
 
-@term (!W!N):
+@term:
     | a=term '*' b=operator_inversion { AST_BinOp(a, Mul, b, precedence=17) }
     | a=term '//' b=operator_inversion { AST_BinOp(a, FDiv, b, precedence=17) }
     | a=term '/' b=operator_inversion { AST_BinOp(a, Div, b, precedence=17) }
@@ -397,7 +400,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | '~' a=factor { AST_UnaryOp(Invert, a, precedence=19) }
     | hypop
 
-@hypop (!W!N):
+@hypop:
     | a=factorial '{' !W !N '|' b=expression '|' !W !N '}' c=hypop { AST_TernOp(THyp, a, b, c, precedence=20) }
     | a=factorial '^' b=factor { AST_BinOp(a, Pow, b, precedence=21) }
     | factorial
@@ -417,7 +420,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | a=cast? ':.' b=cast? { AST_Range(a, b, end_exclusive=False, frozen=True) }
     | cast
 
-@cast (!W!N):
+@cast:
     | b=reference ':' !W !N '(' a=type_spec ')' { AST_Cast(a, b) }
     | reference
 
@@ -426,7 +429,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | '*' a=reference { AST_UnaryOp(Deref, a, precedence=25) }
     | primary
 
-@primary:
+@primary (cT):
     | a=primary '.' b=(IDENT | O) { primary_appendleft((AttrP, b)) }
     | a=primary '[' b=slices? ']' { primary_appendleft((SubscrP, b)) }
     | a=primary '(' b=genexpr ')' { primary_appendleft((CallP, [AST_Arg(None, b)])) }
@@ -438,7 +441,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | a=atom '?' { AST_UnaryOp(Safe, a, precedence=27) }
     | atom
 
-@atom (O):
+@atom (cT):
     | name_expr
     | ("null" | "nil") { AST_Constant(None) }
     | "NAN" { AST_NameWithDefault("NAN", default=float('nan')) }
@@ -448,9 +451,9 @@ File layout is based on the layout of the Grammar/python.gram file in the python
     | "false" { AST_Constant(False) }
     | "F" { AST_NameWithDefault("F", default=False) }
     | '@' { AST_Modifier() }
-    | INT
-    | DEC
-    | a=STRING+ { AST_Strings(a) }
+    | a=INT { cparser(a) }
+    | a=DEC { cparser(a) }
+    | a=(b=STRING { cparser(b) })+ { AST_Strings(a) }
     | &'(' (tuple | tuple_comp | '(' a=expression ')' { a })
     | &'[' (list | list_comp)
     | &'{' (set | dict | set_comp | dict_comp | raw_block)
@@ -466,44 +469,44 @@ File layout is based on the layout of the Grammar/python.gram file in the python
         AST_Lambda(None, None, a, AST_Block([AST_RetStmt(None, [b])])) }
     | '|' a=params '|' c=[':' '(' d=','.(type_spec?)+ e=','? ')' { d + [None] if e else d }] b=expression { AST_Lambda(None, c, a, AST_Block([AST_RetStmt(None, [b])])) }
 
-@genexpr (!W!N):
+@genexpr:
     | a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] { AST_GenComp(a, b, c, d) }
     | a=expression ':' !W !N ':' b=','.expression+ ','? c=[':' d=','.expression+ ','? { d }] { AST_GenComp(a, None, b, c) }
 
 /; data types and comprehensions
-@tuple (!W!N):
+@tuple:
     | '(' f=[!W !N ':'] a=expression ',' ')' { AST_Tuple([a], frozen = f is None) }
     | '(' f=[!W !N ':'] a=[b=','.expression+ ','? { b }] ')' { AST_Tuple(a or [], frozen = f is None) }
 
-@list (!W!N):
+@list:
     | '[' f=[!W !N ':'] a=[b=','.expression+ ','? { b }] ']' { AST_List(a or [], frozen = f is not None) }
 
-@set (!W!N):
+@set:
     | '{' f=[!W !N ':'] a=[b=','.expression+ ','? { b }]  '}' { AST_Set(a or [], frozen = f is not None) }
 
-@dict (!W!N):
+@dict:
     | '{' f=[!W !N ':'] a=','.(b=expression ':' c=expression { (b, c) })+ ','? '}' { AST_Dict(a, frozen = f is not None) }
     | '{' f=[!W !N ':'] ':' '}' { AST_Dict([], frozen = f is not None) }
 
-@tuple_comp (!W!N):
+@tuple_comp:
     | '(' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=True) }
     | '(' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, b, c, d, frozen=False) }
     | '(' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, None, c, d, frozen=True) }
     | '(' !W !N ':' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ')' { AST_TupleComp(a, None, c, d, frozen=False) }
 
-@list_comp (!W!N):
+@list_comp:
     | '[' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=True) }
     | '[' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, b, c, d, frozen=False) }
     | '[' !W !N ':' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, None, c, d, frozen=True) }
     | '[' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] ']' { AST_ListComp(a, None, c, d, frozen=False) }
 
-@set_comp (!W!N):
+@set_comp:
     | '{' !W !N ':' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=True) }
     | '{' a=expression ':' b=targets ('~>' | 'in') c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, b, c, d, frozen=False) }
     | '{' !W !N ':' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, None, c, d, frozen=True) }
     | '{' a=expression ':' !W !N ':' c=','.expression+ ','? d=[':' e=','.expression+ ','? { e }] '}' { AST_SetComp(a, None, c, d, frozen=False) }
 
-@dict_comp (!W!N):
+@dict_comp:
     | '{' !W !N ':' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=True) }
     | '{' a=expression ':' b=expression ':' c=targets ('~>' | 'in') d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, c, d, e, frozen=False) }
     | '{' !W !N ':' a=expression ':' b=expression ':' !W !N ':' d=','.expression+ ','? e=[':' f=','.expression+ ','? { f }] '}' { AST_DictComp(a, b, None, d, e, frozen=True) }
@@ -521,18 +524,18 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 @type_spec:
     | a='|'.type_and+ { a[0] if len(a) == 1 else AST_TypeSpec(a, kind=TOr) }
 
-@type_and:
+@type_and (cT):
     | a='&'.IDENT+ {
         AST_TypeSpec(a[0], kind=TNorm) if len(a) == 1 else AST_TypeSpec(a, kind=TAnd) }
 
-@name_expr:
+@name_expr (cT):
     | a=(IDENT | O) b=variations? { AST_Name(a, b) }
 
-@variations (!rI):
+@variations (rIcT):
     | '(' ':' a=INT? ':' ')' { AST_ScopeNum(a) }
     | '(' '|' a=IDENT? '|' ')' { AST_ScopeName(a) }
 
-@attr_access:
+@attr_access (cT):
     | a=IDENT '.' b='.'.IDENT+ { [a] + b }
 
 @capture:
@@ -541,10 +544,10 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 @params:
     | a=','.param+ ','? { a }
 
-@params_nodefault:
+@params_nodefault (cT):
     | p=','.(b=IDENT a=[':' c=type_spec { c }] { AST_Param(a, b, None) })+ ','? { p }
 
-@param (!W!N):
+@param (cT):
     | b=IDENT a=[':' c=type_spec { c }] { AST_Param(a, b, None) }
     | b=IDENT a=[':' d=type_spec { d }] ':' !W !N '=' c=expression { AST_Param(a, b, c, late_bound_default=False) }
     | b=IDENT a=[':' d=type_spec { d }] '=' !W !N '>' c=expression { AST_Param(a, b, c, late_bound_default=True) }
@@ -552,7 +555,7 @@ File layout is based on the layout of the Grammar/python.gram file in the python
 @args:
     | a=','.(arg | &',' { None })+ ','? { a }
 
-@arg (!W!N):
+@arg (cT):
     | a=[b=IDENT ':' !W !N '=' { b }] c=expression { AST_Arg(a, c) }
 
 @slices:
