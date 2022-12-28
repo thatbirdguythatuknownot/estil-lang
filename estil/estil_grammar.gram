@@ -32,7 +32,14 @@ name=x                          # assign x to name
 :{ ... }                        # mini-grammar currently for inline checking
 
 Tokens:
-O = operators; any token other than
+O = operators; any token other than the ones mentioned below
+IDENT = identifier
+INT = integer
+DEC = decimal
+STRING = string
+WSPACE = spaces that aren't line breaks
+LINEBREAK = line breaks
+EOF = end of file
 
 File layout is based on the layout of the Grammar/python.gram file in the python source code at github.com/python/cpython
 :/
