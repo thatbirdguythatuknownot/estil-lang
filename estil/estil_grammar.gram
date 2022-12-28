@@ -19,10 +19,10 @@ x ~ y                           # use the current alternative if x matches, and 
 @rule_name: rule_body           # rule; AT character (@) used to easily distinguish rules in the parser generator
 @rule_name (<flags>): rule_body # rule with flags
     flags:
-        W = don't ignore non-newline whitespaces except where W* is
-            (when omitted: ignore non-newline whitespaces except where !W is used)
-        N = don't ignore line breaks except where N* is
-            (when omitted: ignore non-newline whitespaces except where !N is used)
+        W = don't ignore non-newline whitespaces
+            (when omitted: ignore non-newline whitespaces except where the W token is used)
+        N = don't ignore line breaks
+            (when omitted: ignore non-newline whitespaces except where the N token is used)
         rI = use only raw ints when INT is used
         cS = use string contents instead of string token when STRING is used
         cT = use token contents instead of token itself when a token is referenced
