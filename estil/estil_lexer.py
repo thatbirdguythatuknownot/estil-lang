@@ -21,6 +21,7 @@ _identifier_characters = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
                           'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
                           '_'}
 _digits = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
+_ident_digits = _identifier_characters | _digits
 _string_specifiers = set(map(lambda x: ''.join(set(''.join(x))), product([*'Cc', ''], [*'Rr', ''], [*'Bb', ''], [*'Ff', ''], [*'Uu', ''], [*'Aa', ''])))
 _escapables = {'n', 'r', 't', 'f', 'v', 'l', 'p', 'e', 'x', '\\', "'", '"', 'b'}
 _number_specifiers = [{'b', 's', 'd', 'l'}, {'s', 'f', 'd', 'l'}]
@@ -154,7 +155,7 @@ class LexerErrorWithStart(LexerError):
     def __str__(self):
         linen = f"{self.line:03d}"
         linen2 = f"{self.line2:03d}"
-        return f"\x1b[38;2;220;0;0mERROR (Lexer):{self.line}:{self.col+1}:\x1b[0m {self.msg}\n{linen}  | {self.text}\n{len(linen) * ' '}    {' ' * self.col}^\n{self.msg2}\n{linen2}  | {self.text2}\n{len(linen2) * ' '}   {' ' * self.col2}^"
+        return f"\x1b[38;2;220;0;0mERROR (Lexer):{self.line}:{self.col+1}:\x1b[0m {self.msg}\n{linen}  | {self.text}\n{len(linen) * ' '}    {' ' * self.col}^\n{self.msg2}\n{linen2}  | {self.text2}\n{len(linen2) * ' '}    {' ' * self.col2}^"
 
 class LexerErrorWithTildeAndCaret(LexerError):
     __module__ = 'builtins'
@@ -202,7 +203,22 @@ class LexerWarningWithStart(LexerWarning):
     def __str__(self):
         linen = f"{self.line:03d}"
         linen2 = f"{self.line2:03d}"
-        return f"\x1b[38;2;220;205;0mWARNING (Lexer):{self.line}:{self.col+1}:\x1b[0m {self.msg}\n{linen}  | {self.text}\n{len(linen) * ' '}   {' ' * self.col}^\n{self.msg2}\n{linen2}  | {self.text2}\n{len(linen2) * ' '}   {' ' * self.col2}^"
+        return f"\x1b[38;2;220;205;0mWARNING (Lexer):{self.line}:{self.col+1}:\x1b[0m {self.msg}\n{linen}  | {self.text}\n{len(linen) * ' '}   {' ' * self.col}^\n{self.msg2}\n{linen2}  | {self.text2}\n{len(linen2) * ' '}    {' ' * self.col2}^"
+
+class LexerWarningWithTildeAndCaret(LexerError):
+    __module__ = 'builtins'
+    def __init__(self, msg, line, text, col, tildenum, caretnum):
+        self.msg = msg
+        self.line = line
+        self.text = text
+        self.col = col
+        self.tildenum = tildenum
+        self.caretnum = caretnum
+    def __repr__(self):
+        return f"LexerWarningWithTildeAndCaret({self.msg!r}, {self.line!r}, {self.text!r}, {self.col!r}, {self.tildenum!r}, {self.caretnum!r})"
+    def __str__(self):
+        linen = f"{self.line:03d}"
+        return f"\x1b[38;2;220;205;0mWARNING (Lexer):{self.line}:{self.col}:\x1b[0m {self.msg}\n{linen}  | {self.text}\n{len(linen) * ' '}    {' ' * self.col}{'~' * self.tildenum}{'^' * self.caretnum}"
 
 number_prefixes = ['0b', '0x', '0o', '']
 
@@ -338,15 +354,30 @@ def _lexer(source: str) -> list:
     hex_digits = _hex_digits
     identifier_characters = _identifier_characters
     digits = _digits
-    ident_digits = identifier_characters | digits
+    ident_digits = _ident_digits
     string_specifiers = _string_specifiers
     escapables = _escapables
     number_specifiers = _number_specifiers
     specifier_digits = _specifier_digits
     tokens = []
+    offsets = [0]
+    len_offsets = 1
+    new_offset = offsets.append
+    curoffset_idx = 0
+    curoffset = 0
+    parse_modestr = True
     _new_token = tokens.append
+    def compute_offset(i):
+        nonlocal curoffset_idx
+        nonlocal curoffset
+        if curoffset_idx + 1 < len_offsets and i >= (tmp := offsets[curoffset_idx + 1])[0]:
+            curoffset = tmp[1]
+            curoffset_idx += 1
+        return i + curoffset
     def new_token(tok):
-        _new_token(Token(tok))
+        nonlocal curoffset
+        idx = 2 + (tok[0] is LT_STRING)
+        _new_token(Token(tok[:-idx] + (*map(compute_offset, tok[-idx:]),)))
     pop_token = tokens.pop
     len_source = len(source)
     modestr = ''
@@ -360,9 +391,11 @@ def _lexer(source: str) -> list:
             return LexerError('brackets nested too deep (max: 300)', i)
         _bracket_stack_append(x)
     i = 0
+    prevoffset = 0
     new_source = ''
     while i < len_source:
         if source[i] == '/':
+            start = i
             start_possible_comment = i = i + 1
             if i < len_source:
                 if source[i] == ';':
@@ -389,17 +422,21 @@ def _lexer(source: str) -> list:
                                                     (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])+1,
                                                     "note: started here",
                                                     (l:=onenewl_source[:start_possible_comment].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_possible_comment].split('\n')[l])))
+                else:
+                    new_source += '/'
+                    continue
+                new_offset((i - prevoffset - (prevoffset := i - start), prevoffset))
             else:
                 new_source += '/'
         elif source[i] == '\\':
-            if (i := i + 1) >= len_source or source[i] != '\\':
-                if i < len_source:
-                    if source[i] not in newlines:
-                        return LexerError(f"Unexpected character {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'} after backslash", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
-                    i += 1
-                else:
-                    print(LexerWarning("Unexpected end of file after backslash", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
-            elif source[i] == '\\':
+            if (i := i + 1) >= len_source:
+                print(LexerWarning("Unexpected end of file after backslash", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
+            elif source[i] != '\\':
+                if source[i] not in newlines:
+                    return LexerError(f"Unexpected character {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'} after backslash", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
+                i += 1
+                new_offset((i - (prevoffset := prevoffset + 1)), prevoffset)
+            else:
                 new_source += '\\\\'
                 i += 1
         elif source[i] == '"':
@@ -426,6 +463,7 @@ def _lexer(source: str) -> list:
             new_source += source[i]
             i += 1
     i = 0
+    len_offsets = len(offsets)
     source = new_source
     len_source = len(source)
     while i < len_source:
@@ -443,13 +481,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('(', i))
         elif source[i] == ')':
             if not bracket_stack:
-                print(LexerWarning("Closing ) does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
+                return LexerError("Closing ) does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
             elif bracket_stack[-1][0] != '(':
                 j = bracket_stack[-1][1]
-                print(LexerWarningWithStart(f'Closing ) does not match {bracket_stack[-1][0]!s}',
-                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                            "note: opening bracket here",
-                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
+                return LexerErrorWithStart(f'Closing ) does not match {bracket_stack[-1][0]!s}',
+                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                           "note: opening bracket here",
+                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
             bracket_stack.pop()
             new_token((LT_RPAREN, LS_RPAREN, i, (i := i + 1)))
         elif source[i] == '[':
@@ -457,13 +495,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('[', i))
         elif source[i] == ']':
             if not bracket_stack:
-                print(LexerWarning("Closing ] does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
+                return LexerError("Closing ] does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
             elif bracket_stack[-1][0] != '[':
                 j = bracket_stack[-1][1]
-                print(LexerWarningWithStart(f'Closing ] does not match {bracket_stack[-1][0]!s}',
-                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                            "note: opening bracket here",
-                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
+                return LexerErrorWithStart(f'Closing ] does not match {bracket_stack[-1][0]!s}',
+                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                           "note: opening bracket here",
+                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
             bracket_stack.pop()
             new_token((LT_RBRACKET, LS_RBRACKET, i, (i := i + 1)))
         elif source[i] == '{':
@@ -471,13 +509,13 @@ def _lexer(source: str) -> list:
             bracket_stack_append(('{', i))
         elif source[i] == '}':
             if not bracket_stack:
-                print(LexerWarning("Closing } does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l])))
+                return LexerError("Closing } does not match any bracket", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]))
             elif bracket_stack[-1][0] != '{':
                 j = bracket_stack[-1][1]
-                print(LexerWarningWithStart(f'Closing }} does not match {bracket_stack[-1][0]!s}',
-                                            (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                            "note: opening bracket here",
-                                            (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
+                return LexerErrorWithStart(f'Closing }} does not match {bracket_stack[-1][0]!s}',
+                                           (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
+                                           "note: opening bracket here",
+                                           (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l]))
             bracket_stack.pop()
             new_token((LT_RBRACE, LS_RBRACE, i, (i := i + 1)))
         elif source[i] == ',':
@@ -739,12 +777,12 @@ def _lexer(source: str) -> list:
                 is_ascii = is_non_ascii = False
             is_bytes = 'b' in string_specifier
             is_formatted = 'f' in string_specifier
-            if (is_char := 'c' in string_specifier):
+            if 'c' in string_specifier:
                 char = source[i]
                 if char in newlines:
                     i += 1
                     if i < len_source and source[i] == "'":
-                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                         i += 1
                         continue
                     else:
@@ -755,7 +793,7 @@ def _lexer(source: str) -> list:
                 if is_raw:
                     i += 1
                     if i < len_source and source[i] == "'":
-                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                         i += 1
                     else:
                         return LexerErrorWithStart(f"Expected single quote closing character, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -788,7 +826,7 @@ def _lexer(source: str) -> list:
                                 if source[i] in hex_digits:
                                     i += 1
                                     if i < len_source and source[i] == "'":
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected single quote closing character after hex escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -796,7 +834,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == "'":
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected single quote closing character after hex escape, got {f'U+{ord(source[i]):04x}'}",
@@ -804,7 +842,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == "'":
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected single quote closing character after hex escape, got {f'U+{ord(source[i]):04x}'}",
@@ -842,7 +880,7 @@ def _lexer(source: str) -> list:
                                         if source[i] in hex_digits:
                                             i += 1
                                             if i < len_source and source[i] == "'":
-                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                 i += 1
                                             else:
                                                 return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -850,7 +888,7 @@ def _lexer(source: str) -> list:
                                                                            "note: started string here",
                                                                            (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                         elif source[i] == "'":
-                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                             i += 1
                                         else:
                                             return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -858,7 +896,7 @@ def _lexer(source: str) -> list:
                                                                        "note: started string here",
                                                                        (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                     elif source[i] == "'":
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -866,7 +904,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == "'":
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -874,7 +912,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == "'":
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -927,7 +965,7 @@ def _lexer(source: str) -> list:
                                                 if source[i] in hex_digits:
                                                     i += 1
                                                     if i < len_source and source[i] == "'":
-                                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                         i += 1
                                                     else:
                                                         return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -935,7 +973,7 @@ def _lexer(source: str) -> list:
                                                                                    "note: started string here",
                                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                                 elif source[i] == "'":
-                                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                     i += 1
                                                 else:
                                                     return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -943,7 +981,7 @@ def _lexer(source: str) -> list:
                                                                                "note: started string here",
                                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                             elif source[i] == "'":
-                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                 i += 1
                                             else:
                                                 return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -951,7 +989,7 @@ def _lexer(source: str) -> list:
                                                                            "note: started string here",
                                                                            (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                         elif source[i] == "'":
-                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                             i += 1
                                         else:
                                             return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -959,7 +997,7 @@ def _lexer(source: str) -> list:
                                                                        "note: started string here",
                                                                        (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                     elif source[i] == "'":
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -967,7 +1005,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == "'":
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -975,7 +1013,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == "'":
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected single quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -985,7 +1023,7 @@ def _lexer(source: str) -> list:
                         elif source[i] in escapables:
                             i += 1
                             if i < len_source and source[i] == "'":
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected single quote closing character after escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1000,7 +1038,7 @@ def _lexer(source: str) -> list:
                     else:
                         if (i := i + 1) < len_source and source[i] == "'":
                             i += 1
-                            new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i))
+                            new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i))
                         else:
                             return LexerErrorWithStart(f"Expected single quote closing character after character, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
                                                        (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
@@ -1026,7 +1064,7 @@ def _lexer(source: str) -> list:
                                                (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
                                                "note: started string here",
                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
-                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, False, start, start_token, i + 1))
                 i += 1
         elif source[i] == '"':
             start = i = i + 1
@@ -1043,12 +1081,12 @@ def _lexer(source: str) -> list:
                 is_ascii = is_non_ascii = 0
             is_bytes = 'b' in string_specifier
             is_formatted = 'f' in string_specifier
-            if (is_char := 'c' in string_specifier):
+            if 'c' in string_specifier:
                 char = source[i]
                 if char in newlines:
                     i += 1
                     if i < len_source and source[i] == '"':
-                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                         i += 1
                         continue
                     else:
@@ -1059,7 +1097,7 @@ def _lexer(source: str) -> list:
                 if is_raw:
                     i += 1
                     if i < len_source and source[i] == '"':
-                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                        new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                         i += 1
                     else:
                         return LexerErrorWithStart(f"Expected double quote closing character, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1092,7 +1130,7 @@ def _lexer(source: str) -> list:
                                 if source[i] in hex_digits:
                                     i += 1
                                     if i < len_source and source[i] == '"':
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected double quote closing character after hex escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1100,7 +1138,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == '"':
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected double quote closing character after hex escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1108,7 +1146,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == '"':
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected double quote closing character after hex escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1146,7 +1184,7 @@ def _lexer(source: str) -> list:
                                         if source[i] in hex_digits:
                                             i += 1
                                             if i < len_source and source[i] == '"':
-                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                 i += 1
                                             else:
                                                 return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1154,7 +1192,7 @@ def _lexer(source: str) -> list:
                                                                            "note: started string here",
                                                                            (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                         elif source[i] == '"':
-                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                             i += 1
                                         else:
                                             return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1162,7 +1200,7 @@ def _lexer(source: str) -> list:
                                                                        "note: started string here",
                                                                        (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                     elif source[i] == '"':
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1170,7 +1208,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == '"':
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1178,7 +1216,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == '"':
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1231,7 +1269,7 @@ def _lexer(source: str) -> list:
                                                 if source[i] in hex_digits:
                                                     i += 1
                                                     if i < len_source and source[i] == '"':
-                                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                         i += 1
                                                     else:
                                                         return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1239,7 +1277,7 @@ def _lexer(source: str) -> list:
                                                                                    "note: started string here",
                                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                                 elif source[i] == '"':
-                                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                     i += 1
                                                 else:
                                                     return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1247,7 +1285,7 @@ def _lexer(source: str) -> list:
                                                                                "note: started string here",
                                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                             elif source[i] == '"':
-                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                                 i += 1
                                             else:
                                                 return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1255,7 +1293,7 @@ def _lexer(source: str) -> list:
                                                                            "note: started string here",
                                                                            (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                         elif source[i] == '"':
-                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                            new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                             i += 1
                                         else:
                                             return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1263,7 +1301,7 @@ def _lexer(source: str) -> list:
                                                                        "note: started string here",
                                                                        (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                     elif source[i] == '"':
-                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                        new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                         i += 1
                                     else:
                                         return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1271,7 +1309,7 @@ def _lexer(source: str) -> list:
                                                                    "note: started string here",
                                                                    (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                                 elif source[i] == '"':
-                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                    new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                     i += 1
                                 else:
                                     return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1279,7 +1317,7 @@ def _lexer(source: str) -> list:
                                                                "note: started string here",
                                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
                             elif source[i] == '"':
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected double quote closing character after unicode escape, got {f'U+{ord(source[i]):04x}'}",
@@ -1289,7 +1327,7 @@ def _lexer(source: str) -> list:
                         elif source[i] in escapables:
                             i += 1
                             if i < len_source and source[i] == '"':
-                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                                 i += 1
                             else:
                                 return LexerErrorWithStart(f"Expected double quote closing character after escape, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1304,7 +1342,7 @@ def _lexer(source: str) -> list:
                     else:
                         if (i := i + 1) < len_source and source[i] == '"':
                             i += 1
-                            new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                            new_token((LT_STRING, char, is_formatted, is_ascii, is_non_ascii, is_bytes, True, start, start_token, i + 1))
                         else:
                             i += 1
                             return LexerErrorWithStart(f"Expected double quote closing character after character, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
@@ -1331,7 +1369,7 @@ def _lexer(source: str) -> list:
                                                (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
                                                "note: started string here",
                                                (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l]))
-                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, is_char, start_token, i + 1))
+                new_token((LT_STRING, source[start:i], is_formatted, is_ascii, is_non_ascii, is_bytes, False, start, start_token, i + 1))
                 i += 1
         elif source[i] in identifier_characters:
             start = i
@@ -1342,7 +1380,7 @@ def _lexer(source: str) -> list:
                 string_specifier = ident.lower()
             else:
                 new_token((LT_IDENT, ident, start, i))
-        elif source[i] == '0' and i + 1 < len_source and (modestr := source[i + 1]) in 'xbosfdl':
+        elif source[i] == '0' and parse_modestr and i + 1 < len_source and (modestr := source[i + 1]) in 'xbosfdl':
             start_token = i
             start_num = i = i + 2
             possible_specifier = ''
@@ -1351,9 +1389,9 @@ def _lexer(source: str) -> list:
                 modestr = source[i]
                 start_num = i = i + 1
             elif modestr not in 'xbo':
-                return LexerErrorWithTildeAndCaret(f"0 with identifier character {modestr} is not a valid number; mode is not valid",
-                                                   (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]),
-                                                   len(possible_specifier) + 1, 1)
+                i = start_token
+                parse_modestr = False
+                continue
             is_dec = False
             supposed_digits = specifier_digits[mode := int((modestr != 'b') + (modestr == 'o'))]
             while i < len_source and source[i] in supposed_digits:
@@ -1414,10 +1452,12 @@ def _lexer(source: str) -> list:
                     return LexerErrorWithTildeAndCaret(f"Expected number after exponent indicator, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
                                                        (l:=onenewl_source[:start_token].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_token].split('\n')[l])-1,
                                                        err_if_no_num - start_token, 1)
-                new_token((int_or_dec[is_dec], source[start_num:end_num], eval(source[start_exp:i] or '0'), specifier, mode, start_token, i))
+                new_token((int_or_dec[is_dec], source[start_num:end_num], eval(source[start_exp:i] or '0'), specifier, mode, i < len_source and (c := source[i] == 'i') and (i := i + 1) and c, start_token, i))
             else:
-                new_token((int_or_dec[is_dec], source[start_num:end_num], 0, specifier, mode, start_token, i))
+                new_token((int_or_dec[is_dec], source[start_num:end_num], 0, specifier, mode, i < len_source and (c := source[i] == 'i') and (i := i + 1) and c, start_token, i))
         elif source[i] in digits or source[i] == '.' and i + 1 < len_source and source[i + 1] in digits:
+            if parse_modestr:
+                parse_modestr = False
             start_token = start_num = i
             is_dec = False
             while (i := i + 1) < len_source and source[i] in digits:
@@ -1464,16 +1504,15 @@ def _lexer(source: str) -> list:
                     return LexerErrorWithTildeAndCaret(f"Expected number after exponent indicator, got {i < len_source and f'U+{ord(source[i]):04x}' or 'EOF'}",
                                                        (l:=onenewl_source[:start_num].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:start_num].split('\n')[l]),
                                                        err_if_no_digits - start_num, 1)
-                new_token((int_or_dec[is_dec], source[start_num:end_num], eval(source[start_exp:i] or '0'), specifier, 3, start_token, i))
+                new_token((int_or_dec[is_dec], source[start_num:end_num], eval(source[start_exp:i] or '0'), specifier, 3, i < len_source and (c := source[i] == 'i') and (i := i + 1) and c, start_token, i))
             else:
-                new_token((int_or_dec[is_dec], source[start_num:end_num], 0, specifier, 3, start_token, i))
+                new_token((int_or_dec[is_dec], source[start_num:end_num], 0, specifier, 3, i < len_source and (c := source[i] == 'i') and (i := i + 1) and c, start_token, i))
         else:
             print(LexerWarning(f"Ignoring unexpected character {f'U+{ord(source[i]):04x}'}", (l:=onenewl_source[:i].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:i].split('\n')[l]), len(onenewl_source[:i].split('\n')[l])))
     if bracket_stack:
-        for bracket in bracket_stack:
-            j = bracket[1]
-            print(LexerWarning(f"Bracket was never closed: {bracket[0]}",
-                               (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])))
+        j = bracket_stack[-1][1]
+        return LexerError(f"Bracket was never closed: {bracket_stack[-1][0]}",
+                          (l:=onenewl_source[:j].count('\n'))+1, onenewl_source.split('\n')[l], len(onenewl_source[:j].split('\n')[l])-1)
     new_token((LT_EOF, 'EOF', -1, -1))
     yield None
     yield tokens
@@ -1493,14 +1532,14 @@ def lexer(source):
         return next(gen)
 
 if __name__ == '__main__':
-    [*lexer(r"5.7de-12339341444841231232323333124.7")]
-    [*lexer("crbfua'\u2424'")]
+    print([*lexer(r"5.7de-12339341444841231232323333124.7")])
+    print([*lexer("crbfua'\u2424'")])
     print(lexer("\\ "))
-    lexer('0bb1101')
-    lexer('0lb1')
-    lexer('0bb.3')
-    lexer('0bx3.87')
-    lexer('0sb.2')
+    print(lexer('0bb1101'))
+    print(lexer('0lb1'))
+    print(lexer('0bb.3'))
+    print(lexer('0bx3.87'))
+    print(lexer('0sb.2'))
     print(lexer("0x.3p"))
     print(lexer("1.3e"))
     print(lexer("0x.3p0x"))
